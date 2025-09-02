@@ -1,21 +1,48 @@
+; Camera capture PIO program for OV2640
+; Captures 8-bit parallel data on PCLK edges when HREF is active
 
 .program cam_cap
-; PIO to sample 8-bit camera bus on rising edge of PCLK while HREF is high
-; IN pins base must be D0..D7 (8 consecutive). JMP PIN is HREF. WAIT uses VSYNC.
-; pin mapping configured from C.
 
-; Wait for VSYNC falling edge (frame start)
-wait_vsync_low:
-    wait 0 pin            ; wait VSYNC == 0 (pin configured as 'in base' + offset via set_pins? overridden in C)
-    jmp start_line
+.wrap_target
+    ; Wait for HREF high (line start)
+    wait 1 gpio 5        ; wait HREF (GP5) == 1
+    
+pixel_loop:
+    ; Wait for PCLK rising edge
+    wait 1 gpio 2        ; wait PCLK (GP2) == 1
+    in pins, 8           ; shift in 8 bits from D0-D7
+    
+    ; Check if HREF is still high (more pixels in this line)
+    jmp pin pixel_loop   ; if HREF still high, get next pixel
+    
+    ; HREF went low - end of line, wait for next line
+.wrap
 
-; Wait HREF high then sample bytes on each rising PCLK
-start_line:
-    wait 1 pin            ; wait HREF == 1 (jmp pin configured to HREF in C)
-sample_loop:
-    wait 1 clk            ; wait rising PCLK (clk pin configured to PCLK in C via set clk pin)
-    in pins, 8            ; sample D0..D7 (LSB on D0)
-    push block            ; push one byte
-    wait 0 clk            ; wait falling PCLK
-    jmp pin sample_loop   ; while HREF high keep sampling
-    jmp start_line        ; next line
+% c-sdk {
+static inline void cam_cap_program_init(PIO pio, uint sm, uint offset, 
+                                        uint data_pin_base, uint href_pin, uint pclk_pin) {
+    pio_sm_config c = cam_cap_program_get_default_config(offset);
+    
+    // Configure IN pins (data pins D0-D7)
+    sm_config_set_in_pins(&c, data_pin_base);
+    sm_config_set_in_shift(&c, true, true, 8); // shift right, autopush every 8 bits
+    
+    // Configure JMP pin (HREF)
+    sm_config_set_jmp_pin(&c, href_pin);
+    
+    // No clock divider - run as fast as possible
+    sm_config_set_clkdiv(&c, 1.0f);
+    
+    // Initialize pins as inputs
+    for (int pin = data_pin_base; pin < data_pin_base + 8; ++pin) {
+        pio_gpio_init(pio, pin);
+        pio_sm_set_pindirs_with_mask(pio, sm, 0, 1u << pin);
+    }
+    pio_gpio_init(pio, href_pin);
+    pio_gpio_init(pio, pclk_pin);
+    pio_sm_set_pindirs_with_mask(pio, sm, 0, (1u << href_pin) | (1u << pclk_pin));
+    
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

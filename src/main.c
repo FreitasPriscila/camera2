@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
@@ -127,33 +126,8 @@ static void cam_pio_init(cam_cap_t *cc) {
     uint offset = pio_add_program(cc->pio, &cam_cap_program);
     cc->sm = pio_claim_unused_sm(cc->pio, true);
 
-    // Configure IN pins base to D0
-    pio_sm_config c = cam_cap_program_get_default_config(offset);
-    sm_config_set_in_pins(&c, OV_D0);           // IN base D0..D7
-    sm_config_set_jmp_pin(&c, OV_HREF);         // JMP PIN uses HREF
-    sm_config_set_clkdiv(&c, 1.0f);             // run at sysclk
-
-    // Shift: autopush each 8 bits
-    sm_config_set_in_shift(&c, true, true, 8);
-
-    // Map PCLK to 'clk' pin (used in WAIT)
-    pio_gpio_init(cc->pio, OV_PCLK);
-    sm_config_set_clk_pins(&c, OV_PCLK);
-
-    // Map VSYNC as a 'pin' for WAIT (PIO can wait on any GPIO # via exec ctrl)
-    // We'll set pin dirs and init for data pins and control pins
-    for (int pin = OV_D0; pin <= OV_D7; ++pin) pio_gpio_init(cc->pio, pin);
-    pio_gpio_init(cc->pio, OV_HREF);
-    pio_gpio_init(cc->pio, OV_VSYNC);
-
-    // Set all those as inputs
-    pio_sm_set_consecutive_pindirs(cc->pio, cc->sm, OV_D0, 8, false);
-    pio_sm_set_consecutive_pindirs(cc->pio, cc->sm, OV_HREF, 1, false);
-    pio_sm_set_consecutive_pindirs(cc->pio, cc->sm, OV_VSYNC, 1, false);
-    pio_sm_set_consecutive_pindirs(cc->pio, cc->sm, OV_PCLK, 1, false);
-
-    pio_sm_init(cc->pio, cc->sm, offset, &c);
-    pio_sm_set_enabled(cc->pio, cc->sm, true);
+    // Use the new init function from the PIO file
+    cam_cap_program_init(cc->pio, cc->sm, offset, OV_D0, OV_HREF, OV_PCLK);
 }
 
 #define LINE_BYTES (FRAME_WIDTH * 2)   // RGB565
@@ -213,12 +187,12 @@ int main() {
     channel_config_set_dreq(&dcfg, pio_get_dreq(CC.pio, CC.sm, false)); // RX
     dma_channel_configure(dma_a, &dcfg,
         linebuf_a,                         // dst
-        &cc.pio->rxf[CC.sm],               // src
+        &CC.pio->rxf[CC.sm],               // src (corrigido de cc para CC)
         LINE_BYTES,                        // transfers
         false);
 
     dma_channel_config dcfg2 = dcfg;
-    dma_channel_configure(dma_b, &dcfg2, linebuf_b, &cc.pio->rxf[CC.sm], LINE_BYTES, false);
+    dma_channel_configure(dma_b, &dcfg2, linebuf_b, &CC.pio->rxf[CC.sm], LINE_BYTES, false);
 
     printf("OV2640 stream RGB565 %dx%d via USB CDC. Magic AA55'R5'.\n", FRAME_WIDTH, FRAME_HEIGHT);
 
