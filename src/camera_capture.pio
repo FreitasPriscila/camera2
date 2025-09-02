@@ -1,0 +1,21 @@
+
+.program cam_cap
+; PIO to sample 8-bit camera bus on rising edge of PCLK while HREF is high
+; IN pins base must be D0..D7 (8 consecutive). JMP PIN is HREF. WAIT uses VSYNC.
+; pin mapping configured from C.
+
+; Wait for VSYNC falling edge (frame start)
+wait_vsync_low:
+    wait 0 pin            ; wait VSYNC == 0 (pin configured as 'in base' + offset via set_pins? overridden in C)
+    jmp start_line
+
+; Wait HREF high then sample bytes on each rising PCLK
+start_line:
+    wait 1 pin            ; wait HREF == 1 (jmp pin configured to HREF in C)
+sample_loop:
+    wait 1 clk            ; wait rising PCLK (clk pin configured to PCLK in C via set clk pin)
+    in pins, 8            ; sample D0..D7 (LSB on D0)
+    push block            ; push one byte
+    wait 0 clk            ; wait falling PCLK
+    jmp pin sample_loop   ; while HREF high keep sampling
+    jmp start_line        ; next line
