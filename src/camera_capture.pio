@@ -1,48 +1,64 @@
 ; Camera capture PIO program for OV2640
 ; Captures 8-bit parallel data on PCLK edges when HREF is active
+; Adapted for Pico SDK v1.3.0+
 
 .program cam_cap
 
 .wrap_target
-    ; Wait for HREF high (line start)
-    wait 1 gpio 5        ; wait HREF (GP5) == 1
+    wait 1 pin 3      ; Wait for VSYNC high (frame active)
+    wait 0 pin 3      ; Wait for VSYNC low (start of frame)
     
+line_loop:
+    wait 1 pin 2      ; Wait for HREF high (line active)
 pixel_loop:
-    ; Wait for PCLK rising edge
-    wait 1 gpio 2        ; wait PCLK (GP2) == 1
-    in pins, 8           ; shift in 8 bits from D0-D7
-    
-    ; Check if HREF is still high (more pixels in this line)
-    jmp pin pixel_loop   ; if HREF still high, get next pixel
-    
-    ; HREF went low - end of line, wait for next line
+    wait 0 pin 1      ; Wait for PCLK falling edge
+    wait 1 pin 1      ; Wait for PCLK rising edge
+    in pins, 8        ; Shift in 8 bits from D0-D7
+    jmp pin pixel_loop; If HREF is still high, continue capturing pixels
+
+    wait 0 pin 2      ; Wait for HREF low (end of line)
+    jmp line_loop     ; Go to next line
 .wrap
 
 % c-sdk {
+#include "hardware/clocks.h" // NECESSÁRIO para clock_get_hz
+
 static inline void cam_cap_program_init(PIO pio, uint sm, uint offset, 
-                                        uint data_pin_base, uint href_pin, uint pclk_pin) {
+                                      uint data_pin_base, uint pclk_pin, 
+                                      uint href_pin, uint vsync_pin) {
     pio_sm_config c = cam_cap_program_get_default_config(offset);
     
-    // Configure IN pins (data pins D0-D7)
+    // Configurar pinos de entrada (D0-D7)
     sm_config_set_in_pins(&c, data_pin_base);
-    sm_config_set_in_shift(&c, true, true, 8); // shift right, autopush every 8 bits
-    
-    // Configure JMP pin (HREF)
+    // Configurar pino de JMP (HREF)
     sm_config_set_jmp_pin(&c, href_pin);
-    
-    // No clock divider - run as fast as possible
-    sm_config_set_clkdiv(&c, 1.0f);
-    
-    // Initialize pins as inputs
-    for (int pin = data_pin_base; pin < data_pin_base + 8; ++pin) {
-        pio_gpio_init(pio, pin);
-        pio_sm_set_pindirs_with_mask(pio, sm, 0, 1u << pin);
+    // Configurar deslocamento: para a direita, autopush a cada 8 bits
+    sm_config_set_in_shift(&c, true, true, 8);
+    // Aumentar a velocidade da FIFO
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // O PCLK da câmara pode ser rápido. Aumentar a velocidade do clock do PIO.
+    // PCLK ~12MHz. Clock do sistema ~125MHz. div=125/24=~5. Divisor mínimo é ~1.
+    float div = (float)clock_get_hz(clk_sys) / (24000000UL); 
+    sm_config_set_clkdiv(&c, div);
+
+    // Inicializar os pinos para o PIO
+    for (uint i = data_pin_base; i < data_pin_base + 8; ++i) {
+        pio_gpio_init(pio, i);
     }
-    pio_gpio_init(pio, href_pin);
     pio_gpio_init(pio, pclk_pin);
-    pio_sm_set_pindirs_with_mask(pio, sm, 0, (1u << href_pin) | (1u << pclk_pin));
+    pio_gpio_init(pio, href_pin);
+    pio_gpio_init(pio, vsync_pin);
     
+    // Configurar direção dos pinos para o SM
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin_base, 8, false); // D0-D7 como entrada
+    pio_sm_set_consecutive_pindirs(pio, sm, pclk_pin, 1, false);     // PCLK como entrada
+    pio_sm_set_consecutive_pindirs(pio, sm, href_pin, 1, false);     // HREF como entrada
+    pio_sm_set_consecutive_pindirs(pio, sm, vsync_pin, 1, false);    // VSYNC como entrada
+
+    // Carregar configuração e ativar o state machine
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
 }
 %}
+

@@ -26,6 +26,7 @@ pico_sdk_init()
 
 add_executable(ov2640_pico_usb_raw
     src/main.c
+    src/camera_capture.pio
 )
 
 pico_generate_pio_header(ov2640_pico_usb_raw ${CMAKE_CURRENT_LIST_DIR}/src/camera_capture.pio)
